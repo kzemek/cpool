@@ -1,0 +1,4 @@
+[{<<"backoff">>,
+  {git,"git://github.com/ferd/backoff.git",
+       {ref,"cc6160ba8f15204db4c23618dfc93932535f1d64"}},
+  0}].
