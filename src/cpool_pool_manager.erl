@@ -4,7 +4,10 @@
 
 -record(state, {
     pool_name,
-    conns = #{},
+    connected = 0,
+    pool_size,
+    stagger,
+    backoff,
     supervisor,
     pending = []
 }).
@@ -35,46 +38,43 @@ get_connection(PoolName, no_wait_for_reconnect) ->
     ChosenPid.
 
 init({PoolName, Supervisor, Opts}) ->
-    ConnsNum = proplists:get_value(pool_size, Opts, 1),
+    PoolSize = proplists:get_value(pool_size, Opts, 1),
+    Stagger = proplists:get_value(stagger, Opts, 10),
     BackoffMax = proplists:get_value(backoff_max, Opts, 10),
     BackoffStart = proplists:get_value(backoff, Opts, 1),
-
     Backoff = backoff:type(backoff:init(BackoffStart, BackoffMax), jitter),
-    ets:new(PoolName, [public, named_table, {read_concurrency, true}]),
+    ets:new(PoolName, [protected, named_table, {read_concurrency, true}]),
 
-    [self() ! {reconnect, Backoff} || _ <- lists:seq(1, ConnsNum)],
-    {ok, #state{pool_name = PoolName, supervisor = Supervisor}}.
+    schedule_reconnect(0),
 
-handle_call(wait_for_connection, From, State) ->
-    case maps:size(State#state.conns) of
-        0 -> {noreply, State#state{pending = [From | State#state.pending]}};
-        _ -> {reply, ok, State}
-    end;
+    {ok, #state{pool_name = PoolName, pool_size = PoolSize, stagger = Stagger,
+                backoff = Backoff, supervisor = Supervisor}}.
+
+handle_call(wait_for_connection, From, State = #state{connected = 0}) ->
+    {noreply, State#state{pending = [From | State#state.pending]}};
+handle_call(wait_for_connection, _From, State) ->
+    {reply, ok, State};
 handle_call(_Msg, _From, State) ->
     {reply, {error, bad_call}, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({reconnect, Backoff}, State) ->
+handle_info(reconnect, State) ->
     ConnSup = cpool_pool_sup:get_connection_supervisor(State#state.supervisor),
     case catch supervisor:start_child(ConnSup, []) of
         {ok, Pid} ->
-            _MonitorRef = erlang:monitor(process, Pid),
-            {_, NewBackoff} = backoff:succeed(Backoff),
-            NewConns = maps:put(Pid, NewBackoff, State#state.conns),
-            ets:insert(State#state.pool_name, {Pid}),
-            {noreply, NewState#state{conns = NewConns}};
+            NewState = on_connection_success(Pid, State),
+            reconnecting(NewState) andalso schedule_reconnect(State#state.stagger),
+            {noreply, NewState};
         _Error ->
-            schedule_reconnect(Backoff),
-            {noreply, State}
+            NewBackoff = schedule_reconnect_after_fail(State#state.backoff),
+            {noreply, State#state{backoff = NewBackoff}}
     end;
 handle_info({'DOWN', _MonitorRef, _Type, Pid, _Info}, State) ->
     ets:delete(State#state.pool_name, Pid),
-    Backoff = maps:get(Pid, NewState#state.conns),
-    NewConns = maps:remove(Pid, NewState#state.conns),
-    schedule_reconnect(Backoff),
-    {noreply, NewState#state{conns = NewConns}};
+    reconnecting(State) orelse schedule_reconnect(0),
+    {noreply, State#state{connected = State#state.connected + 1}};
 handle_info(_, State) ->
     {noreply, State}.
 
@@ -84,8 +84,28 @@ code_change(_, _, State) ->
 terminate(_Reason, _State) ->
     ignore.
 
-schedule_reconnect(Backoff) ->
+on_connection_success(Pid, State) ->
+    ets:insert(State#state.pool_name, {Pid}),
+    _MonitorRef = erlang:monitor(process, Pid),
+    {_, NewBackoff} = backoff:succeed(State#state.backoff),
+    (notify_pending(State))#state{pending = [], backoff = NewBackoff,
+                                  connected = State#state.connected + 1}.
+
+schedule_reconnect(_After = 0) ->
+    self() ! reconnect;
+schedule_reconnect(After) when is_integer(After) ->
+    erlang:send_after(After, self(), reconnect).
+
+schedule_reconnect_after_fail(Backoff) ->
     Delay = backoff:get(Backoff),
+    schedule_reconnect(timer:seconds(Delay)),
     {_, NewBackoff} = backoff:fail(Backoff),
-    erlang:send_after(timer:seconds(Delay), self(), {reconnect, NewBackoff}).
+    NewBackoff.
+
+notify_pending(State = #state{pending = Pending}) ->
+    [gen_server:reply(From, ok) || From <- Pending],
+    State#state{pending = []}.
+
+reconnecting(#state{connected = Connected, pool_size = PoolSize}) ->
+    Connected < PoolSize.
 
