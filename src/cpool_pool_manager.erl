@@ -6,11 +6,10 @@
     pool_name,
     conns = #{},
     supervisor,
-    subscribers = [],
     pending = []
 }).
 
--export([start_link/3, get_connection/2, subscribe/1]).
+-export([start_link/3, get_connection/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]).
 
 start_link(PoolName, Supervisor, Opts) ->
@@ -35,9 +34,6 @@ get_connection(PoolName, no_wait_for_reconnect) ->
     {_, ChosenPid} = lists:min(FilteredPids),
     ChosenPid.
 
-subscribe(PoolName) ->
-    gen_server:call(PoolName, subscribe).
-
 init({PoolName, Supervisor, Opts}) ->
     ConnsNum = proplists:get_value(pool_size, Opts, 1),
     BackoffMax = proplists:get_value(backoff_max, Opts, 10),
@@ -54,12 +50,6 @@ handle_call(wait_for_connection, From, State) ->
         0 -> {noreply, State#state{pending = [From | State#state.pending]}};
         _ -> {reply, ok, State}
     end;
-handle_call(subscribe, {Pid, _}, State) ->
-    NewState = State#state{subscribers = [Pid | State#state.subscribers]},
-    case maps:size(State#state.conns) of
-        0 -> {reply, disconnected, NewState};
-        _ -> {reply, connected, NewState}
-    end;
 handle_call(_Msg, _From, State) ->
     {reply, {error, bad_call}, State}.
 
@@ -74,7 +64,6 @@ handle_info({reconnect, Backoff}, State) ->
             {_, NewBackoff} = backoff:succeed(Backoff),
             NewConns = maps:put(Pid, NewBackoff, State#state.conns),
             ets:insert(State#state.pool_name, {Pid}),
-            NewState = maybe_notify_reconnect(State),
             {noreply, NewState#state{conns = NewConns}};
         _Error ->
             schedule_reconnect(Backoff),
@@ -82,7 +71,6 @@ handle_info({reconnect, Backoff}, State) ->
     end;
 handle_info({'DOWN', _MonitorRef, _Type, Pid, _Info}, State) ->
     ets:delete(State#state.pool_name, Pid),
-    NewState = maybe_notify_disconnect(State),
     Backoff = maps:get(Pid, NewState#state.conns),
     NewConns = maps:remove(Pid, NewState#state.conns),
     schedule_reconnect(Backoff),
@@ -101,26 +89,3 @@ schedule_reconnect(Backoff) ->
     {_, NewBackoff} = backoff:fail(Backoff),
     erlang:send_after(timer:seconds(Delay), self(), {reconnect, NewBackoff}).
 
-maybe_notify_disconnect(State) ->
-    case ets:info(State#state.pool_name, size) of
-        0 ->
-            NewSubscribers = cull_subscribers(State#state.subscribers),
-            [Pid ! {disconnected, State#state.pool_name} || Pid <- NewSubscribers],
-            State#state{subscribers = NewSubscribers};
-        _ ->
-            State
-    end.
-
-maybe_notify_reconnect(State) ->
-    case ets:info(State#state.pool_name, size) of
-        1 ->
-            NewSubscribers = cull_subscribers(State#state.subscribers),
-            [Pid ! {reconnected, State#state.pool_name} || Pid <- NewSubscribers],
-            [gen_server:reply(PendingFrom, ok) || PendingFrom <- State#state.pending],
-            State#state{subscribers = NewSubscribers, pending = []};
-        _ ->
-            State
-    end.
-
-cull_subscribers(Subscribers) ->
-    [Pid || Pid <- Subscribers, is_process_alive(Pid)].
