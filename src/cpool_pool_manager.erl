@@ -34,6 +34,7 @@ get_connection(PoolName, no_wait_for_reconnect) ->
                 end
             end,
             AllPids),
+    [] =:= FilteredPids andalso error(no_connections),
     {_, ChosenPid} = lists:min(FilteredPids),
     ChosenPid.
 
