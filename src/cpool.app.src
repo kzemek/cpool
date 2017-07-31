@@ -1,5 +1,5 @@
 {application, cpool,
- [{description, "An OTP application"},
+ [{description, "A connection-focused worker pool."},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, { cpool_app, []}},
@@ -10,7 +10,7 @@
   {env,[]},
   {modules, []},
 
-  {maintainers, []},
-  {licenses, []},
-  {links, []}
+  {maintainers, ["Konrad Zemek <konrad.zemek@gmail.com>"]},
+  {licenses, ["MPL 2.0"]},
+  {links, [{"Github", "https://github.com/kzemek/cpool"}]}
  ]}.

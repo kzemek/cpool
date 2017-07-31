@@ -1,4 +1,6 @@
-[{<<"backoff">>,
-  {git,"git://github.com/ferd/backoff.git",
-       {ref,"cc6160ba8f15204db4c23618dfc93932535f1d64"}},
-  0}].
+{"1.1.0",
+[{<<"backoff">>,{pkg,<<"backoff">>,<<"1.1.3">>},0}]}.
+[
+{pkg_hash,[
+ {<<"backoff">>, <<"DE762C05ED6DFAE862D83DC9E58AE936792B01302B3595F5CFFE86F2D8E6C1DD">>}]}
+].
