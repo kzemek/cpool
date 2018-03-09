@@ -75,7 +75,7 @@ handle_info(reconnect, State) ->
 handle_info({'DOWN', _MonitorRef, _Type, Pid, _Info}, State) ->
     ets:delete(State#state.pool_name, Pid),
     reconnecting(State) orelse schedule_reconnect(0),
-    {noreply, State#state{connected = State#state.connected + 1}};
+    {noreply, State#state{connected = State#state.connected - 1}};
 handle_info(_, State) ->
     {noreply, State}.
 

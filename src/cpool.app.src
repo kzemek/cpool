@@ -1,6 +1,6 @@
 {application, cpool,
  [{description, "A connection-focused worker pool."},
-  {vsn, "0.1.0"},
+  {vsn, "0.1.1"},
   {registered, []},
   {mod, { cpool_app, []}},
   {applications,
